@@ -143,6 +143,33 @@ def read_dvs_red(filename):
     return shape, xytp
 
 
+def read_davis_346(filename):
+    """Get the aer events from DAVIS346 with resolution of (260, 346)
+
+    Parameters:
+        filename:   filename
+
+    Returns:
+        shape (tuple):
+            (height, width) of the sensor array
+
+        events: numpy structured array of events
+    """
+    data_version, data_start, start_timestamp = read_aedat_header_from_file(filename)
+    all_events = get_aer_events_from_file(filename, data_version, data_start)
+    all_addr = all_events["address"]
+    t = all_events["timeStamp"]
+
+    # x, y, and p : bit-shift and bit-mask values taken from jAER (https://github.com/SensorsINI/jaer)
+    x = (346 - 1) - ((all_addr & 4190208) >> 12)
+    y = (260 - 1) - ((all_addr & 2143289344) >> 22)
+    p = ((all_addr & 2048) >> 11)
+
+    xytp = make_structured_array(x, y, t, p)
+    shape = (346, 260)
+    return shape, start_timestamp, xytp
+
+
 def read_dvs_346mini(filename):
     """Get the aer events from DVS with resolution of (132,104)
 
@@ -214,6 +241,7 @@ def read_aedat_header_from_file(filename):
     Returns:
         data_version (float):   The version of the .aedat file
         data_start (int):       The start index of the data
+        start_timestamp (int):  The start absolute system timestamp in micro-seconds
     """
     filename = os.path.expanduser(filename)
     assert os.path.isfile(filename), f"The .aedat file '{filename}' does not exist."
@@ -221,16 +249,19 @@ def read_aedat_header_from_file(filename):
     count = 1
     is_comment = "#" in str(f.read(count))
 
+    start_timestamp = None
     while is_comment:
         # Read the rest of the line
         head = str(f.readline())
         if "!AER-DAT" in head:
             data_version = float(head[head.find("!AER-DAT") + 8 : -5])
+        elif "Creation time:" in head:
+            start_timestamp = int(head.split()[4].split("\\")[0])
         is_comment = "#" in str(f.read(1))
         count += 1
     data_start = f.seek(-1, 1)
     f.close()
-    return data_version, data_start
+    return data_version, data_start, start_timestamp
 
 
 def get_aer_events_from_file(filename, data_version, data_start):
