@@ -100,6 +100,8 @@ def integrator_downsample(events: np.ndarray, sensor_size: tuple, target_size: t
     if np.issubdtype(events["t"].dtype, np.integer):
         dt *= 1000
         dt_scaling = True
+    else:
+        dt_scaling = False
     
     if differentiator_call:
         assert dt // events["t"][-1] == 0
@@ -113,6 +115,7 @@ def integrator_downsample(events: np.ndarray, sensor_size: tuple, target_size: t
     # Compute all histograms at once
     all_frame_histograms = to_frame_numpy(events, sensor_size=(*target_size, 2), time_window=dt)
     
+    
     # Subtract the channels for ON/OFF differencing
     frame_histogram_diffs = all_frame_histograms[:, 1] - all_frame_histograms[:, 0]
     
@@ -121,12 +124,26 @@ def integrator_downsample(events: np.ndarray, sensor_size: tuple, target_size: t
     
     events_new = []
     
+    theta = np.zeros((np.prod(target_size), 2))
+    tau_theta = 80
+    
     for time, frame_histogram in enumerate(frame_histogram_diffs):
     
         frame_spike += frame_histogram
+        
+        theta_unravelled = np.reshape(theta, (*target_size, 2))
             
-        coordinates_pos = np.stack(np.nonzero(np.maximum(frame_spike >= noise_threshold, 0))).T
-        coordinates_neg = np.stack(np.nonzero(np.maximum(-frame_spike >= noise_threshold, 0))).T
+        coordinates_pos = np.stack(np.nonzero(np.maximum(frame_spike > theta_unravelled[...,0], 0))).T
+        coordinates_neg = np.stack(np.nonzero(np.maximum(-frame_spike > theta_unravelled[...,1], 0))).T
+        
+        active_coordinates = [coordinates_pos, coordinates_neg]
+        
+        for p in range(theta.shape[-1]):
+            coords = np.ravel_multi_index(np.split(active_coordinates[p], 2, axis=1), target_size)
+            theta[np.squeeze(coords),p] += 0.5
+            
+        # theta' = -theta/tau_theta
+        theta *= np.exp(-time / tau_theta)
         
         if np.logical_or(coordinates_pos.size, coordinates_neg.size).sum():
         
@@ -155,3 +172,9 @@ def integrator_downsample(events: np.ndarray, sensor_size: tuple, target_size: t
         dtype = np.dtype({'names': names, 'formats': formats})
         
         return unstructured_to_structured(events_new.copy(), dtype=dtype)
+
+events = np.load("dvs_struct_array.npy")
+sensor_size = (128, 128, 1)
+target_size = (20, 20)
+dt = 1
+events_downsampled = differentiator_downsample(events, sensor_size, target_size, dt, noise_threshold=5)
